@@ -24,9 +24,7 @@ A modern Single Sign-On (SSO) implementation using Vue.js frontend applications 
 
 ```
 .
-```
-.
-├── app1/                      # First Vue application
+├── app1/                      
 │   ├── node_modules/
 │   ├── src/
 │   │   ├── assets/
@@ -47,7 +45,7 @@ A modern Single Sign-On (SSO) implementation using Vue.js frontend applications 
 │   ├── package-lock.json
 │   ├── package.json
 │   └── vite.config.js
-├── app2/                      # Second Vue application (identical structure to app1)
+├── app2/                     
 │   ├── node_modules/
 │   ├── src/
 │   │   ├── assets/
@@ -68,19 +66,11 @@ A modern Single Sign-On (SSO) implementation using Vue.js frontend applications 
 │   ├── package-lock.json
 │   ├── package.json
 │   └── vite.config.js
-├── auth-service/              # Flask authentication service
+├── auth-service/        
 │   ├── app.py
 │   ├── Dockerfile
 │   └── requirements.txt
-├── nginx/                     # Main Nginx configuration
-│   ├── Dockerfile
-│   └── nginx.conf
-├──  docker-compose.yml
-├── auth-service/             # Flask authentication service
-│   ├── app.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── nginx/                    # Main Nginx configuration
+├── nginx/                  
 │   ├── Dockerfile
 │   └── nginx.conf
 ├── docker-compose.yml
