@@ -67,7 +67,6 @@ api.interceptors.response.use(
 export const useAuthStore = defineStore("auth", {
   state: () => ({
     user: null,
-    token: null,
   }),
 
   actions: {
@@ -82,7 +81,6 @@ export const useAuthStore = defineStore("auth", {
         });
 
         console.log("Login response received:", response.data);
-        this.token = response.data.token;
         this.user = response.data.user;
 
         logCookies("After Login");
@@ -131,7 +129,6 @@ export const useAuthStore = defineStore("auth", {
         console.log("Logout response:", response.data);
 
         // Clear local state
-        this.token = null;
         this.user = null;
 
         logCookies("After Logout");
@@ -141,7 +138,6 @@ export const useAuthStore = defineStore("auth", {
       } catch (error) {
         console.error("Logout error:", error);
         // Still clear local state even if the request fails
-        this.token = null;
         this.user = null;
         throw error;
       }

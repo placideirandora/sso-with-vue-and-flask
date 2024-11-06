@@ -1,10 +1,11 @@
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
-import redis
 import jwt
 from datetime import datetime, timedelta
+import zoneinfo
 import os
 import logging
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -28,59 +29,75 @@ COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", ".sso.local")
 
 # Constants
 JWT_SECRET = os.getenv("JWT_SECRET", "your_secret_key_here")
-TOKEN_EXPIRY = 3600  # 1 hour
+TOKEN_EXPIRY = 600  # 1 minute in seconds
 
-# Redis connection with error handling
-try:
-    redis_client = redis.Redis(
-        host=os.getenv("REDIS_HOST", "redis"),
-        port=int(os.getenv("REDIS_PORT", 6379)),
-        decode_responses=True,
+# Set Rwanda timezone
+RWANDA_TZ = zoneinfo.ZoneInfo("Africa/Kigali")
+
+
+def get_rwanda_time():
+    """Get current time in Rwanda."""
+    return datetime.now(RWANDA_TZ)
+
+
+def create_token(username):
+    """Create a new JWT token with proper expiration."""
+    # Get current Rwanda time
+    now = get_rwanda_time()
+    exp = now + timedelta(seconds=TOKEN_EXPIRY)
+
+    # Convert to timestamps
+    now_timestamp = int(now.timestamp())
+    exp_timestamp = int(exp.timestamp())
+
+    logger.debug(f"Token Creation Details (Rwanda Time):")
+    logger.debug(f"Current time (Rwanda): {now.isoformat()}")
+    logger.debug(f"Expiry time (Rwanda): {exp.isoformat()}")
+    logger.debug(f"Current timestamp: {now_timestamp}")
+    logger.debug(f"Expiry timestamp: {exp_timestamp}")
+    logger.debug(f"Time difference: {TOKEN_EXPIRY} seconds")
+
+    token = jwt.encode(
+        {
+            "sub": username,
+            "exp": exp_timestamp,
+            "iat": now_timestamp,
+            "tz": "Africa/Kigali",
+        },
+        JWT_SECRET,
+        algorithm="HS256",
     )
-    redis_client.ping()  # Test connection
-    logger.info("Redis connection successful")
-except Exception as e:
-    logger.error(f"Redis connection failed: {e}")
-    raise
+    return token, exp
 
 
-def log_request_details():
-    logger.debug("=== Request Details ===")
-    logger.debug(f"Method: {request.method}")
-    logger.debug(f"URL: {request.url}")
-    logger.debug(f"Headers: {dict(request.headers)}")
-    logger.debug(f"Cookies: {request.cookies}")
-    logger.debug("===================")
+def verify_token(token):
+    """Verify token validity."""
+    try:
+        # Get current Rwanda time
+        current_time = get_rwanda_time()
+        current_timestamp = int(current_time.timestamp())
 
+        logger.debug(
+            f"Verification time (Rwanda): {current_time.isoformat()} ({current_timestamp})"
+        )
 
-def log_response_details(response):
-    logger.debug("=== Response Details ===")
-    logger.debug(f"Status: {response.status_code}")
-    logger.debug(f"Headers: {dict(response.headers)}")
-    logger.debug(f"Set-Cookie header: {response.headers.get('Set-Cookie')}")
-    logger.debug("===================")
-    return response
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], leeway=0)
 
+        # Convert expiration timestamp to Rwanda time
+        exp_time = datetime.fromtimestamp(payload["exp"], RWANDA_TZ)
+        logger.debug(f"Token Details (Rwanda Time):")
+        logger.debug(f"Expiration time: {exp_time.isoformat()}")
+        logger.debug(
+            f"Time until expiration: {payload['exp'] - current_timestamp} seconds"
+        )
 
-@app.before_request
-def log_request_info():
-    logger.debug("--- New Request ---")
-    logger.debug(f"Method: {request.method}")
-    logger.debug(f"URL: {request.url}")
-    logger.debug(f"Headers: {dict(request.headers)}")
-    logger.debug(f"Cookies: {request.cookies}")
-    if request.method == "OPTIONS":
-        logger.debug("OPTIONS request received")
-    elif request.get_json(silent=True):
-        logger.debug(f"Body: {request.get_json()}")
-
-
-@app.after_request
-def log_response_info(response):
-    logger.debug("--- Response ---")
-    logger.debug(f"Status: {response.status}")
-    logger.debug(f"Headers: {dict(response.headers)}")
-    return response
+        return payload
+    except jwt.ExpiredSignatureError:
+        logger.warning("Token has expired")
+        raise
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Invalid token: {str(e)}")
+        raise
 
 
 @app.route("/auth/login", methods=["POST", "OPTIONS"])
@@ -102,41 +119,40 @@ def login():
         password = data.get("password")
 
         if username == "testuser" and password == "password123":
-            token = jwt.encode(
-                {"sub": username, "exp": datetime.utcnow() + timedelta(seconds=3600)},
-                "your_secret_key_here",
-                algorithm="HS256",
-            )
+            token, exp = create_token(username)
+            current_time = get_rwanda_time()
 
             response = make_response(
                 jsonify(
                     {
                         "token": token,
                         "user": {"username": username, "name": "Test User"},
+                        "expires": exp.isoformat(),
+                        "current_time": current_time.isoformat(),
+                        "expiry_seconds": TOKEN_EXPIRY,
+                        "timezone": "Africa/Kigali (CAT/UTC+2)",
                     }
                 )
             )
 
-            # Set cookie with domain
             response.set_cookie(
                 "access_token",
                 token,
                 httponly=True,
                 samesite="Lax",
                 secure=False,
-                max_age=3600,
+                max_age=TOKEN_EXPIRY,
                 domain=COOKIE_DOMAIN,
                 path="/",
+                expires=exp,
             )
 
-            # CORS headers
             response.headers.add(
                 "Access-Control-Allow-Origin", request.headers.get("Origin")
             )
             response.headers.add("Access-Control-Allow-Credentials", "true")
             response.headers.add("Access-Control-Expose-Headers", "Set-Cookie")
 
-            logger.debug(f"Set-Cookie header: {response.headers.get('Set-Cookie')}")
             return response
 
         return jsonify({"error": "Invalid credentials"}), 401
@@ -158,7 +174,6 @@ def verify():
         response.headers.add("Access-Control-Allow-Credentials", "true")
         return response
 
-    logger.debug(f"Cookies received: {request.cookies}")
     token = request.cookies.get("access_token")
 
     if not token:
@@ -166,20 +181,29 @@ def verify():
         return jsonify({"error": "No token provided"}), 401
 
     try:
-        # Verify token
-        payload = jwt.decode(token, "your_secret_key_here", algorithms=["HS256"])
+        current_time = get_rwanda_time()
+        current_timestamp = int(current_time.timestamp())
+
+        payload = verify_token(token)
         username = payload["sub"]
+        exp_timestamp = payload["exp"]
+
+        exp_time = datetime.fromtimestamp(exp_timestamp, RWANDA_TZ)
+        time_until_expiry = exp_timestamp - current_timestamp
 
         response = make_response(
             jsonify(
                 {
                     "authenticated": True,
                     "user": {"username": username, "name": "Test User"},
+                    "exp": exp_time.isoformat(),
+                    "current_time": current_time.isoformat(),
+                    "seconds_until_expiry": time_until_expiry,
+                    "timezone": "Africa/Kigali (CAT/UTC+2)",
                 }
             )
         )
 
-        # Set CORS headers
         response.headers.add(
             "Access-Control-Allow-Origin", request.headers.get("Origin")
         )
@@ -188,9 +212,24 @@ def verify():
         return response
 
     except jwt.ExpiredSignatureError:
-        return jsonify({"error": "Token has expired"}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({"error": "Invalid token"}), 401
+        return (
+            jsonify(
+                {
+                    "error": "Token has expired",
+                    "code": "token_expired",
+                    "current_time": get_rwanda_time().isoformat(),
+                    "timezone": "Africa/Kigali (CAT/UTC+2)",
+                }
+            ),
+            401,
+        )
+    except jwt.InvalidTokenError as e:
+        return (
+            jsonify(
+                {"error": "Invalid token", "code": "token_invalid", "details": str(e)}
+            ),
+            401,
+        )
     except Exception as e:
         logger.error(f"Verification error: {str(e)}")
         return jsonify({"error": str(e)}), 401
@@ -209,50 +248,31 @@ def logout():
         return response
 
     try:
-        # Get the token from cookies
-        token = request.cookies.get("access_token")
+        response = make_response(jsonify({"message": "Successfully logged out"}))
 
-        if token:
-            # Remove session from Redis if you're using it
-            redis_client.delete(f"session:{token}")
+        # Delete the cookie
+        response.set_cookie(
+            "access_token",
+            "",
+            httponly=True,
+            samesite="Lax",
+            secure=True,
+            max_age=0,
+            domain=COOKIE_DOMAIN,
+            path="/",
+            expires=0,
+        )
 
-            # Create response
-            response = make_response(jsonify({"message": "Successfully logged out"}))
+        response.headers.add(
+            "Access-Control-Allow-Origin", request.headers.get("Origin")
+        )
+        response.headers.add("Access-Control-Allow-Credentials", "true")
 
-            # Delete the cookie by setting max_age=0
-            response.set_cookie(
-                "access_token",
-                "",
-                httponly=True,
-                samesite="Lax",
-                secure=False,
-                max_age=0,
-                domain=COOKIE_DOMAIN,
-                path="/",
-            )
-
-            # Set CORS headers
-            response.headers.add(
-                "Access-Control-Allow-Origin", request.headers.get("Origin")
-            )
-            response.headers.add("Access-Control-Allow-Credentials", "true")
-
-            return response
-
-        return jsonify({"message": "No session to logout"}), 200
+        return response
 
     except Exception as e:
         logger.exception("Logout error")
         return jsonify({"error": str(e)}), 500
-
-
-def handle_preflight():
-    response = make_response()
-    response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin"))
-    response.headers.add("Access-Control-Allow-Headers", "*")
-    response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
-    response.headers.add("Access-Control-Allow-Credentials", "true")
-    return response
 
 
 if __name__ == "__main__":
