@@ -1,22 +1,22 @@
-# Vue SSO Implementation with Flask and Redis
+# Vue SSO Implementation with Flask and JWT
 
-A modern Single Sign-On (SSO) implementation using Vue.js frontend applications and Flask/Redis backend. This project demonstrates how to build a secure and scalable SSO solution with session management across multiple applications using cookies and Redis.
+A modern Single Sign-On (SSO) implementation using Vue.js frontend applications and Flask backend. This project demonstrates how to build a secure and scalable SSO solution with JWT-based authentication across multiple applications using cookies.
 
 ## Features
 
 - 🔐 Secure cookie-based authentication
-- 🔄 Shared session management with Redis
+- 🔄 JWT token management
 - ⚡ Fast Vue.js frontend applications
 - 🔑 Centralized Flask authentication service
 - 🐳 Docker containerization
 - 🌐 Cross-domain cookie sharing
-- 📝 JWT token implementation
 - 🚪 Single logout across all applications
+- 🕒 Timezone-aware token management (Africa/Kigali)
 
 ## Tech Stack
 
 - Frontend: Vue 3 + Vite
-- Backend: Flask + Redis
+- Backend: Flask
 - Infrastructure: Docker + Nginx
 - Authentication: JWT + Cookie-based sessions
 
@@ -25,12 +25,9 @@ A modern Single Sign-On (SSO) implementation using Vue.js frontend applications 
 ```
 .
 ├── app1/                      
-│   ├── node_modules/
 │   ├── src/
 │   │   ├── assets/
-│   │   │   └── main.css
 │   │   ├── components/
-│   │   │   └── NavBar.vue
 │   │   ├── views/
 │   │   │   ├── HomeView.vue
 │   │   │   ├── LoginView.vue
@@ -38,34 +35,11 @@ A modern Single Sign-On (SSO) implementation using Vue.js frontend applications 
 │   │   ├── main.js
 │   │   ├── router.js
 │   │   └── store.js
-│   ├── .gitignore
 │   ├── Dockerfile
-│   ├── index.html
 │   ├── nginx.conf
-│   ├── package-lock.json
-│   ├── package.json
 │   └── vite.config.js
 ├── app2/                     
-│   ├── node_modules/
-│   ├── src/
-│   │   ├── assets/
-│   │   │   └── main.css
-│   │   ├── components/
-│   │   │   └── NavBar.vue
-│   │   ├── views/
-│   │   │   ├── HomeView.vue
-│   │   │   ├── LoginView.vue
-│   │   │   └── App.vue
-│   │   ├── main.js
-│   │   ├── router.js
-│   │   └── store.js
-│   ├── .gitignore
-│   ├── Dockerfile
-│   ├── index.html
-│   ├── nginx.conf
-│   ├── package-lock.json
-│   ├── package.json
-│   └── vite.config.js
+│   └── [Similar structure to app1]
 ├── auth-service/        
 │   ├── app.py
 │   ├── Dockerfile
@@ -73,8 +47,7 @@ A modern Single Sign-On (SSO) implementation using Vue.js frontend applications 
 ├── nginx/                  
 │   ├── Dockerfile
 │   └── nginx.conf
-├── docker-compose.yml
-└── README.md
+└── docker-compose.yml
 ```
 
 ## Architecture Overview
@@ -82,21 +55,20 @@ A modern Single Sign-On (SSO) implementation using Vue.js frontend applications 
 The project implements SSO using the following components:
 
 1. **Frontend Apps**: Two separate Vue.js applications running on different domains
-2. **Auth Service**: A Flask application handling authentication and session management
-3. **Redis**: For storing session information
-4. **Nginx**: For serving the Vue apps and handling routing
+2. **Auth Service**: A Flask application handling authentication and JWT management
+3. **Nginx**: For serving the Vue apps and handling routing
 
 ### How SSO Works in This Implementation
 
 1. User attempts to access App1
 2. If not authenticated, redirected to login
 3. Upon successful login:
-   - JWT token is generated
-   - Session is stored in Redis
-   - Cookie is set with the JWT token
+   - JWT token is generated with proper expiration time
+   - Token is stored in an HTTP-only cookie
+   - Token includes timezone information (CAT/UTC+2)
 4. When accessing App2:
    - Cookie is automatically sent to auth service
-   - Auth service validates token with Redis
+   - Auth service validates the JWT token
    - If valid, user is automatically logged in
 
 ## Custom Domain Setup
@@ -117,22 +89,23 @@ Add the following entries to your `/etc/hosts` file:
 127.0.0.1 sso.local app1.sso.local app2.sso.local
 ```
 
-## Session Management with Redis
+## Token Management
 
-Redis is used for session storage and management:
+JWT tokens are used for authentication with the following characteristics:
 
-1. **Session Creation**: When a user logs in, their session info is stored in Redis with:
-   - Key: `session:{token}`
-   - Value: Serialized user data
-   - Expiry: 1 hour (configurable)
+1. **Token Creation**: When a user logs in:
+   - Token includes username and expiration time
+   - Token is timezone-aware (Africa/Kigali)
+   - Default expiration time is 10 minutes
 
-2. **Session Validation**: Each request to protected routes verifies:
-   - Token from cookie exists in Redis
+2. **Token Validation**: Each request to protected routes verifies:
+   - Token signature is valid
    - Token hasn't expired
+   - Token timezone information matches server
 
-3. **Session Termination**: On logout:
-   - Redis entry is deleted
-   - Cookie is invalidated
+3. **Token Invalidation**: On logout:
+   - Cookie is cleared
+   - Client-side state is reset
    - User is redirected to login
 
 ## Running the Project
@@ -175,24 +148,6 @@ docker-compose up -d
 - App2: http://app2.sso.local:8081
 - Auth Service: http://sso.local:5001
 
-### Development
-
-For local development:
-
-1. Install frontend dependencies:
-```bash
-cd app1
-npm install
-cd ../app2
-npm install
-```
-
-2. Install backend dependencies:
-```bash
-cd auth-service
-pip install -r requirements.txt
-```
-
 ## Technical Details
 
 ### Cookie Configuration
@@ -205,7 +160,7 @@ response.set_cookie(
     httponly=True,
     samesite='Lax',
     secure=False,  # Set to True in production
-    max_age=3600,
+    max_age=600,  # 10 minutes
     domain='.sso.local',
     path='/'
 )
@@ -223,9 +178,9 @@ response.set_cookie(
    - SameSite policy enforced
    - Domain restriction
 
-3. **Token Management**:
-   - Short-lived tokens
-   - Redis for central session control
+3. **Token Security**:
+   - Short-lived tokens (10 minutes)
+   - Timezone-aware validation
    - Secure token generation
 
 ## Production Considerations
@@ -237,10 +192,10 @@ For production deployment:
    - Configure SSL in Nginx
    - Update CORS settings
 
-2. Redis Security:
-   - Enable authentication
-   - Configure persistence
-   - Set up replication
+2. Token Security:
+   - Use strong secret keys
+   - Consider implementing refresh tokens
+   - Adjust token lifetime based on requirements
 
 3. Domain Configuration:
    - Use real domain names
@@ -257,8 +212,8 @@ Common issues and solutions:
    - Ensure CORS headers are correct
 
 2. **Authentication Failed**:
-   - Check Redis connection
-   - Verify token expiration
+   - Check token expiration
+   - Verify timezone settings
    - Check cookie domain settings
 
 3. **Cross-Origin Issues**:
@@ -266,3 +221,7 @@ Common issues and solutions:
    - Check allowed origins
    - Ensure credentials are enabled
 
+4. **Token Expiration Issues**:
+   - Verify server and client timezone settings
+   - Check token expiration time configuration
+   - Monitor clock synchronization between services

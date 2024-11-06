@@ -1,22 +1,11 @@
 version: "3.8"
 
 services:
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - sso-network
-
   auth-service:
     build: ./auth-service
     ports:
       - "5001:5001"
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - JWT_SECRET=your_secret_key_here
       - FLASK_ENV=development
       - FLASK_DEBUG=1
@@ -41,9 +30,6 @@ services:
       - VITE_AUTH_URL=http://sso.local:5001
     networks:
       - sso-network
-
-volumes:
-  redis_data:
 
 networks:
   sso-network:

@@ -1,7 +1,6 @@
 # auth-service/requirements.txt
 flask==2.0.1
 flask-cors==3.0.10
-redis==4.0.2
 pyjwt==2.3.0
 python-dotenv==0.19.0
 werkzeug==2.0.1
