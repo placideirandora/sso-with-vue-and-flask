@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import zoneinfo
 import os
 import logging
-import time
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -29,7 +28,7 @@ COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", ".sso.local")
 
 # Constants
 JWT_SECRET = os.getenv("JWT_SECRET", "your_secret_key_here")
-TOKEN_EXPIRY = 600  # 1 minute in seconds
+TOKEN_EXPIRY = 120  # 10 minutes in seconds
 
 # Set Rwanda timezone
 RWANDA_TZ = zoneinfo.ZoneInfo("Africa/Kigali")
@@ -42,19 +41,15 @@ def get_rwanda_time():
 
 def create_token(username):
     """Create a new JWT token with proper expiration."""
-    # Get current Rwanda time
     now = get_rwanda_time()
     exp = now + timedelta(seconds=TOKEN_EXPIRY)
 
-    # Convert to timestamps
     now_timestamp = int(now.timestamp())
     exp_timestamp = int(exp.timestamp())
 
     logger.debug(f"Token Creation Details (Rwanda Time):")
     logger.debug(f"Current time (Rwanda): {now.isoformat()}")
     logger.debug(f"Expiry time (Rwanda): {exp.isoformat()}")
-    logger.debug(f"Current timestamp: {now_timestamp}")
-    logger.debug(f"Expiry timestamp: {exp_timestamp}")
     logger.debug(f"Time difference: {TOKEN_EXPIRY} seconds")
 
     token = jwt.encode(
@@ -73,23 +68,15 @@ def create_token(username):
 def verify_token(token):
     """Verify token validity."""
     try:
-        # Get current Rwanda time
         current_time = get_rwanda_time()
         current_timestamp = int(current_time.timestamp())
 
-        logger.debug(
-            f"Verification time (Rwanda): {current_time.isoformat()} ({current_timestamp})"
-        )
+        logger.debug(f"Verification time (Rwanda): {current_time.isoformat()}")
 
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], leeway=0)
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
 
-        # Convert expiration timestamp to Rwanda time
         exp_time = datetime.fromtimestamp(payload["exp"], RWANDA_TZ)
-        logger.debug(f"Token Details (Rwanda Time):")
-        logger.debug(f"Expiration time: {exp_time.isoformat()}")
-        logger.debug(
-            f"Time until expiration: {payload['exp'] - current_timestamp} seconds"
-        )
+        logger.debug(f"Token expiration time: {exp_time.isoformat()}")
 
         return payload
     except jwt.ExpiredSignatureError:
@@ -98,6 +85,22 @@ def verify_token(token):
     except jwt.InvalidTokenError as e:
         logger.warning(f"Invalid token: {str(e)}")
         raise
+
+
+def clear_auth_cookie(response):
+    """Helper function to clear authentication cookie consistently."""
+    response.set_cookie(
+        "access_token",
+        "",
+        httponly=True,
+        samesite="Lax",
+        secure=False,  # Match the login setting
+        max_age=0,
+        domain=COOKIE_DOMAIN,
+        path="/",
+        expires=datetime.utcnow() - timedelta(days=1),  # Force immediate expiration
+    )
+    return response
 
 
 @app.route("/auth/login", methods=["POST", "OPTIONS"])
@@ -135,6 +138,7 @@ def login():
                 )
             )
 
+            # Set the cookie with consistent settings
             response.set_cookie(
                 "access_token",
                 token,
@@ -182,14 +186,13 @@ def verify():
 
     try:
         current_time = get_rwanda_time()
-        current_timestamp = int(current_time.timestamp())
 
         payload = verify_token(token)
         username = payload["sub"]
         exp_timestamp = payload["exp"]
 
         exp_time = datetime.fromtimestamp(exp_timestamp, RWANDA_TZ)
-        time_until_expiry = exp_timestamp - current_timestamp
+        time_until_expiry = exp_timestamp - int(current_time.timestamp())
 
         response = make_response(
             jsonify(
@@ -212,7 +215,8 @@ def verify():
         return response
 
     except jwt.ExpiredSignatureError:
-        return (
+        # Clear the expired cookie
+        response = make_response(
             jsonify(
                 {
                     "error": "Token has expired",
@@ -223,13 +227,16 @@ def verify():
             ),
             401,
         )
+        return clear_auth_cookie(response)
     except jwt.InvalidTokenError as e:
-        return (
+        # Clear the invalid cookie
+        response = make_response(
             jsonify(
                 {"error": "Invalid token", "code": "token_invalid", "details": str(e)}
             ),
             401,
         )
+        return clear_auth_cookie(response)
     except Exception as e:
         logger.error(f"Verification error: {str(e)}")
         return jsonify({"error": str(e)}), 401
@@ -250,19 +257,10 @@ def logout():
     try:
         response = make_response(jsonify({"message": "Successfully logged out"}))
 
-        # Delete the cookie
-        response.set_cookie(
-            "access_token",
-            "",
-            httponly=True,
-            samesite="Lax",
-            secure=True,
-            max_age=0,
-            domain=COOKIE_DOMAIN,
-            path="/",
-            expires=0,
-        )
+        # Clear the auth cookie using the helper function
+        response = clear_auth_cookie(response)
 
+        # Set CORS headers
         response.headers.add(
             "Access-Control-Allow-Origin", request.headers.get("Origin")
         )

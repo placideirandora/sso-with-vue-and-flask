@@ -26,6 +26,13 @@ const logCookies = (context) => {
   console.log("========================");
 };
 
+// Helper function to clear auth cookie
+const clearAuthCookie = () => {
+  document.cookie = `access_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; domain=${
+    import.meta.env.VITE_COOKIE_DOMAIN || ".sso.local"
+  }`;
+};
+
 // Request interceptor
 api.interceptors.request.use(
   (config) => {
@@ -48,18 +55,15 @@ api.interceptors.response.use(
     console.log("Response headers:", response.headers);
     logCookies("After Response");
 
-    // Check for Set-Cookie header
-    const setCookie = response.headers["set-cookie"];
-    if (setCookie) {
-      console.log("Set-Cookie header found:", setCookie);
-    } else {
-      console.log("No Set-Cookie header in response");
-    }
-
     return response;
   },
   (error) => {
-    console.error("Response error:", error);
+    // Handle 401 responses
+    if (error.response && error.response.status === 401) {
+      // Clear local auth state
+      const authStore = useAuthStore();
+      authStore.clearAuth();
+    }
     return Promise.reject(error);
   }
 );
@@ -84,18 +88,10 @@ export const useAuthStore = defineStore("auth", {
         this.user = response.data.user;
 
         logCookies("After Login");
-
-        // Check response headers
-        console.log("Response headers:", response.headers);
-        console.log(
-          "Access-Control-Expose-Headers:",
-          response.headers["access-control-expose-headers"]
-        );
-        console.log("Set-Cookie header:", response.headers["set-cookie"]);
-
         return true;
       } catch (error) {
         console.error("Login error:", error);
+        this.clearAuth();
         return false;
       }
     },
@@ -112,10 +108,12 @@ export const useAuthStore = defineStore("auth", {
 
         if (response.data.authenticated) {
           this.user = response.data.user;
+          return true;
         }
-        return response.data.authenticated;
+        return false;
       } catch (error) {
         console.error("Verify error:", error);
+        this.clearAuth();
         return false;
       }
     },
@@ -125,22 +123,25 @@ export const useAuthStore = defineStore("auth", {
         console.log("=== Starting Logout Process ===");
         logCookies("Before Logout");
 
-        const response = await api.post("/auth/logout");
-        console.log("Logout response:", response.data);
+        await api.post("/auth/logout");
+        this.clearAuth();
 
-        // Clear local state
-        this.user = null;
+        // Force clear the cookie on the client side as well
+        clearAuthCookie();
 
         logCookies("After Logout");
-
-        // You might want to redirect to login page here
         return true;
       } catch (error) {
         console.error("Logout error:", error);
-        // Still clear local state even if the request fails
-        this.user = null;
+        // Still clear auth state even if the request fails
+        this.clearAuth();
+        clearAuthCookie();
         throw error;
       }
+    },
+
+    clearAuth() {
+      this.user = null;
     },
   },
 });
