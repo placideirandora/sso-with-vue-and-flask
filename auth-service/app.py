@@ -28,7 +28,7 @@ COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", ".sso.local")
 
 # Constants
 JWT_SECRET = os.getenv("JWT_SECRET", "your_secret_key_here")
-TOKEN_EXPIRY = 120  # 10 minutes in seconds
+TOKEN_EXPIRY = 1800  # 30 minutes in seconds
 
 # Set Rwanda timezone
 RWANDA_TZ = zoneinfo.ZoneInfo("Africa/Kigali")
