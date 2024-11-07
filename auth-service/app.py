@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 import zoneinfo
 import os
 import logging
+import base64
+import hashlib
+import hmac
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -25,13 +28,74 @@ CORS(
 )
 
 COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", ".sso.local")
-
-# Constants
 JWT_SECRET = os.getenv("JWT_SECRET", "your_secret_key_here")
 TOKEN_EXPIRY = 1800  # 30 minutes in seconds
-
-# Set Rwanda timezone
 RWANDA_TZ = zoneinfo.ZoneInfo("Africa/Kigali")
+
+# Test user credentials
+TEST_USER = {
+    "username": "testuser",
+    "name": "Test User",
+    "password_hash": 'pbkdf2_sha256$600000$kjDznrSz6fGFIJfWsQOns8$PtSj/2mBBmrB402bNRZTwC6XkLwon9QLvOZGinl1a+Y=',
+}
+
+
+class DjangoPasswordVerifier:
+    """Matches Django's PBKDF2PasswordHasher verification"""
+
+    @staticmethod
+    def verify_password(password, encoded):
+        """Verify if the given password matches the encoded hash from Django"""
+        try:
+            # Remove any whitespace
+            encoded = encoded.strip()
+
+            # Split the encoded hash into its components
+            parts = encoded.split("$")
+            if len(parts) != 4:
+                logger.error(f"Invalid hash format. Got {len(parts)} parts, expected 4")
+                logger.error(f"Parts: {parts}")
+                return False
+
+            algorithm = parts[0]
+            iterations = int(parts[1])
+            salt = parts[2]
+            stored_hash = parts[3]
+
+            logger.debug("=== Password Verification Details ===")
+            logger.debug(f"Input password: {password}")
+            logger.debug(f"Algorithm: {algorithm}")
+            logger.debug(f"Iterations: {iterations}")
+            logger.debug(f"Salt: {salt}")
+            logger.debug(f"Stored hash: {stored_hash}")
+
+            # Prepare password and salt
+            password_bytes = password.encode()
+            salt_bytes = salt.encode("ascii")
+
+            # Calculate hash using exact same parameters as Django
+            calculated_hash = hashlib.pbkdf2_hmac(
+                "sha256", password_bytes, salt_bytes, iterations, dklen=32
+            )
+
+            # Encode the calculated hash to base64
+            calculated_b64 = base64.b64encode(calculated_hash).decode("ascii").strip()
+
+            logger.debug(f"Calculated hash (base64): {calculated_b64}")
+            logger.debug(f"Stored hash: {stored_hash}")
+            logger.debug(
+                f"Hashes match: {hmac.compare_digest(stored_hash.encode('ascii'), calculated_b64.encode('ascii'))}"
+            )
+
+            # Compare the calculated hash with the stored hash
+            return hmac.compare_digest(
+                stored_hash.encode("ascii"), calculated_b64.encode("ascii")
+            )
+
+        except Exception as e:
+            logger.error(f"Password verification error: {str(e)}")
+            logger.exception("Full traceback:")
+            return False
 
 
 def get_rwanda_time():
@@ -69,8 +133,6 @@ def verify_token(token):
     """Verify token validity."""
     try:
         current_time = get_rwanda_time()
-        current_timestamp = int(current_time.timestamp())
-
         logger.debug(f"Verification time (Rwanda): {current_time.isoformat()}")
 
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
@@ -94,11 +156,11 @@ def clear_auth_cookie(response):
         "",
         httponly=True,
         samesite="Lax",
-        secure=False,  # Match the login setting
+        secure=False,
         max_age=0,
         domain=COOKIE_DOMAIN,
         path="/",
-        expires=datetime.utcnow() - timedelta(days=1),  # Force immediate expiration
+        expires=datetime.utcnow() - timedelta(days=1),
     )
     return response
 
@@ -121,45 +183,63 @@ def login():
         username = data.get("username")
         password = data.get("password")
 
-        if username == "testuser" and password == "password123":
-            token, exp = create_token(username)
-            current_time = get_rwanda_time()
+        logger.debug(f"Login attempt for username: {username}")
 
-            response = make_response(
-                jsonify(
-                    {
-                        "token": token,
-                        "user": {"username": username, "name": "Test User"},
-                        "expires": exp.isoformat(),
-                        "current_time": current_time.isoformat(),
-                        "expiry_seconds": TOKEN_EXPIRY,
-                        "timezone": "Africa/Kigali (CAT/UTC+2)",
-                    }
+        if not username or not password:
+            return jsonify({"error": "Username and password are required"}), 400
+
+        # Check if user exists
+        if username == TEST_USER["username"]:
+            logger.debug("User found, verifying password...")
+
+            # Verify password using Django's password hasher
+            password_valid = DjangoPasswordVerifier.verify_password(
+                password, TEST_USER["password_hash"]
+            )
+
+            if password_valid:
+                logger.debug("Password verified successfully")
+                token, exp = create_token(username)
+                current_time = get_rwanda_time()
+
+                response = make_response(
+                    jsonify(
+                        {
+                            "token": token,
+                            "user": {"username": username, "name": TEST_USER["name"]},
+                            "expires": exp.isoformat(),
+                            "current_time": current_time.isoformat(),
+                            "expiry_seconds": TOKEN_EXPIRY,
+                            "timezone": "Africa/Kigali (CAT/UTC+2)",
+                        }
+                    )
                 )
-            )
 
-            # Set the cookie with consistent settings
-            response.set_cookie(
-                "access_token",
-                token,
-                httponly=True,
-                samesite="Lax",
-                secure=False,
-                max_age=TOKEN_EXPIRY,
-                domain=COOKIE_DOMAIN,
-                path="/",
-                expires=exp,
-            )
+                response.set_cookie(
+                    "access_token",
+                    token,
+                    httponly=True,
+                    samesite="Lax",
+                    secure=False,
+                    max_age=TOKEN_EXPIRY,
+                    domain=COOKIE_DOMAIN,
+                    path="/",
+                    expires=exp,
+                )
 
-            response.headers.add(
-                "Access-Control-Allow-Origin", request.headers.get("Origin")
-            )
-            response.headers.add("Access-Control-Allow-Credentials", "true")
-            response.headers.add("Access-Control-Expose-Headers", "Set-Cookie")
+                response.headers.add(
+                    "Access-Control-Allow-Origin", request.headers.get("Origin")
+                )
+                response.headers.add("Access-Control-Allow-Credentials", "true")
+                response.headers.add("Access-Control-Expose-Headers", "Set-Cookie")
 
-            return response
-
-        return jsonify({"error": "Invalid credentials"}), 401
+                return response
+            else:
+                logger.warning("Password verification failed")
+                return jsonify({"error": "Invalid credentials"}), 401
+        else:
+            logger.warning(f"User not found: {username}")
+            return jsonify({"error": "Invalid credentials"}), 401
 
     except Exception as e:
         logger.exception("Login error")

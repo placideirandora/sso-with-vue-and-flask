@@ -18,7 +18,7 @@
                 {{ loading ? 'Logging in...' : 'Login' }}
             </button>
 
-            <p class="help">Use testuser/password123 for testing</p>
+            <p class="help">Use testuser/helloword123 for testing</p>
         </form>
     </div>
 </template>
