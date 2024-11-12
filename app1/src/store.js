@@ -74,13 +74,13 @@ export const useAuthStore = defineStore("auth", {
   }),
 
   actions: {
-    async login(username, password) {
+    async login(email, password) {
       try {
         console.log("=== Starting Login Process ===");
         logCookies("Before Login");
 
         const response = await api.post("/auth/login", {
-          username,
+          email,
           password,
         });
 

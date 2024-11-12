@@ -2,14 +2,22 @@ version: "3.8"
 
 services:
   auth-service:
-    build: ./auth-service
+    build: 
+      context: ./auth-service
+      dockerfile: Dockerfile
     ports:
       - "5001:5001"
     environment:
-      - JWT_SECRET=your_secret_key_here
-      - FLASK_ENV=development
-      - FLASK_DEBUG=1
       - COOKIE_DOMAIN=.sso.local
+      - JWT_SECRET=your_secret_key_here
+      - DB_PATH=/app/data/ared.db  # Path inside container
+    volumes:
+      - /Users/placideirandora/CODING/WiFI-Captive_Portal/ared.db:/app/data/ared.db:ro  # Host:Container path mapping (read-only)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/app/data/ared.db').close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - sso-network
 

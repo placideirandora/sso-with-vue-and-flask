@@ -3,8 +3,8 @@
         <h1>Login to App 2</h1>
         <form @submit.prevent="handleLogin" class="login-form">
             <div class="form-group">
-                <label for="username">Username</label>
-                <input id="username" v-model="username" type="text" required>
+                <label for="email">Email</label>
+                <input id="email" v-model="email" type="text" required>
             </div>
 
             <div class="form-group">
@@ -31,7 +31,7 @@ import { useRouter } from 'vue-router'
 const authStore = useAuthStore()
 const router = useRouter()
 
-const username = ref('')
+const email = ref('')
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
@@ -41,7 +41,7 @@ const handleLogin = async () => {
     error.value = ''
 
     try {
-        const success = await authStore.login(username.value, password.value)
+        const success = await authStore.login(email.value, password.value)
         if (success) {
             router.push('/home')
         } else {

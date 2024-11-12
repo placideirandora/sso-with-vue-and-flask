@@ -1,18 +1,23 @@
-from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
-import jwt
-from datetime import datetime, timedelta
-import zoneinfo
 import os
+import sys
+import jwt
 import logging
+import sqlite3
 import base64
 import hashlib
 import hmac
+from datetime import datetime, timedelta
+import zoneinfo
+from flask import Flask, request, jsonify, make_response
+from flask_cors import CORS
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
+# Initialize Flask app
 app = Flask(__name__)
 CORS(
     app,
@@ -27,119 +32,136 @@ CORS(
     },
 )
 
+# Configuration
 COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", ".sso.local")
 JWT_SECRET = os.getenv("JWT_SECRET", "your_secret_key_here")
-TOKEN_EXPIRY = 1800  # 30 minutes in seconds
+TOKEN_EXPIRY = 1800  # 30 minutes
 RWANDA_TZ = zoneinfo.ZoneInfo("Africa/Kigali")
+DB_PATH = os.getenv("DB_PATH", "/app/data/ared.db")
 
-# Test user credentials
-TEST_USER = {
-    "username": "testuser",
-    "name": "Test User",
-    "password_hash": 'pbkdf2_sha256$600000$kjDznrSz6fGFIJfWsQOns8$PtSj/2mBBmrB402bNRZTwC6XkLwon9QLvOZGinl1a+Y=',
-}
+
+class DatabaseConnection:
+    def __init__(self):
+        self.conn = None
+        self.cursor = None
+
+    def __enter__(self):
+        try:
+            self.conn = sqlite3.connect(DB_PATH)
+            self.cursor = self.conn.cursor()
+            return self
+        except sqlite3.Error as e:
+            logger.error(f"Database connection error: {e}")
+            raise
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.conn:
+            self.conn.close()
+
+
+def get_user_by_email(email):
+    """Retrieve user from database by email"""
+    with DatabaseConnection() as db:
+        try:
+            db.cursor.execute(
+                """
+                SELECT 
+                    email, 
+                    first_name,
+                    last_name,
+                    role,
+                    password,
+                    date_joined
+                FROM users 
+                WHERE email = ?
+            """,
+                (email,),
+            )
+            user = db.cursor.fetchone()
+
+            if user:
+                return {
+                    "email": user[0],
+                    "first_name": user[1],
+                    "last_name": user[2],
+                    "role": user[3],
+                    "password": user[4],
+                    "date_joined": user[5],
+                }
+            return None
+        except sqlite3.Error as e:
+            logger.error(f"Database error while fetching user: {e}")
+            return None
 
 
 class DjangoPasswordVerifier:
-    """Matches Django's PBKDF2PasswordHasher verification"""
-
     @staticmethod
     def verify_password(password, encoded):
-        """Verify if the given password matches the encoded hash from Django"""
+        """Verify password against Django's password hash"""
         try:
-            # Remove any whitespace
             encoded = encoded.strip()
-
-            # Split the encoded hash into its components
             parts = encoded.split("$")
+
             if len(parts) != 4:
                 logger.error(f"Invalid hash format. Got {len(parts)} parts, expected 4")
-                logger.error(f"Parts: {parts}")
                 return False
 
-            algorithm = parts[0]
-            iterations = int(parts[1])
-            salt = parts[2]
-            stored_hash = parts[3]
+            algorithm, iterations, salt, stored_hash = parts
+            iterations = int(iterations)
 
-            logger.debug("=== Password Verification Details ===")
-            logger.debug(f"Input password: {password}")
+            logger.debug("Password verification details:")
             logger.debug(f"Algorithm: {algorithm}")
             logger.debug(f"Iterations: {iterations}")
             logger.debug(f"Salt: {salt}")
-            logger.debug(f"Stored hash: {stored_hash}")
 
-            # Prepare password and salt
-            password_bytes = password.encode()
-            salt_bytes = salt.encode("ascii")
-
-            # Calculate hash using exact same parameters as Django
+            # Calculate hash
             calculated_hash = hashlib.pbkdf2_hmac(
-                "sha256", password_bytes, salt_bytes, iterations, dklen=32
+                "sha256", password.encode(), salt.encode("ascii"), iterations, dklen=32
             )
-
-            # Encode the calculated hash to base64
             calculated_b64 = base64.b64encode(calculated_hash).decode("ascii").strip()
 
-            logger.debug(f"Calculated hash (base64): {calculated_b64}")
-            logger.debug(f"Stored hash: {stored_hash}")
-            logger.debug(
-                f"Hashes match: {hmac.compare_digest(stored_hash.encode('ascii'), calculated_b64.encode('ascii'))}"
-            )
-
-            # Compare the calculated hash with the stored hash
-            return hmac.compare_digest(
+            # Compare hashes
+            is_valid = hmac.compare_digest(
                 stored_hash.encode("ascii"), calculated_b64.encode("ascii")
             )
 
+            logger.debug(f"Password verification result: {is_valid}")
+            return is_valid
+
         except Exception as e:
             logger.error(f"Password verification error: {str(e)}")
-            logger.exception("Full traceback:")
             return False
 
 
-def get_rwanda_time():
-    """Get current time in Rwanda."""
-    return datetime.now(RWANDA_TZ)
+def create_token(user_data):
+    """Create a new JWT token with user data"""
+    try:
+        now = datetime.now(RWANDA_TZ)
+        exp = now + timedelta(seconds=TOKEN_EXPIRY)
 
-
-def create_token(username):
-    """Create a new JWT token with proper expiration."""
-    now = get_rwanda_time()
-    exp = now + timedelta(seconds=TOKEN_EXPIRY)
-
-    now_timestamp = int(now.timestamp())
-    exp_timestamp = int(exp.timestamp())
-
-    logger.debug(f"Token Creation Details (Rwanda Time):")
-    logger.debug(f"Current time (Rwanda): {now.isoformat()}")
-    logger.debug(f"Expiry time (Rwanda): {exp.isoformat()}")
-    logger.debug(f"Time difference: {TOKEN_EXPIRY} seconds")
-
-    token = jwt.encode(
-        {
-            "sub": username,
-            "exp": exp_timestamp,
-            "iat": now_timestamp,
-            "tz": "Africa/Kigali",
-        },
-        JWT_SECRET,
-        algorithm="HS256",
-    )
-    return token, exp
+        token = jwt.encode(
+            {
+                "sub": user_data["email"],
+                "name": f"{user_data['first_name']} {user_data['last_name']}",
+                "role": user_data["role"],
+                "exp": int(exp.timestamp()),
+                "iat": int(now.timestamp()),
+                "tz": "Africa/Kigali",
+            },
+            JWT_SECRET,
+            algorithm="HS256",
+        )
+        return token, exp
+    except Exception as e:
+        logger.error(f"Token creation error: {e}")
+        raise
 
 
 def verify_token(token):
-    """Verify token validity."""
+    """Verify token validity"""
     try:
-        current_time = get_rwanda_time()
-        logger.debug(f"Verification time (Rwanda): {current_time.isoformat()}")
-
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-
-        exp_time = datetime.fromtimestamp(payload["exp"], RWANDA_TZ)
-        logger.debug(f"Token expiration time: {exp_time.isoformat()}")
-
+        logger.debug(f"Token payload: {payload}")
         return payload
     except jwt.ExpiredSignatureError:
         logger.warning("Token has expired")
@@ -147,22 +169,6 @@ def verify_token(token):
     except jwt.InvalidTokenError as e:
         logger.warning(f"Invalid token: {str(e)}")
         raise
-
-
-def clear_auth_cookie(response):
-    """Helper function to clear authentication cookie consistently."""
-    response.set_cookie(
-        "access_token",
-        "",
-        httponly=True,
-        samesite="Lax",
-        secure=False,
-        max_age=0,
-        domain=COOKIE_DOMAIN,
-        path="/",
-        expires=datetime.utcnow() - timedelta(days=1),
-    )
-    return response
 
 
 @app.route("/auth/login", methods=["POST", "OPTIONS"])
@@ -180,66 +186,63 @@ def login():
 
     try:
         data = request.get_json()
-        username = data.get("username")
+        email = data.get("email")
         password = data.get("password")
 
-        logger.debug(f"Login attempt for username: {username}")
+        logger.debug(f"Login attempt for email: {email}")
 
-        if not username or not password:
-            return jsonify({"error": "Username and password are required"}), 400
+        if not email or not password:
+            return jsonify({"error": "Email and password are required"}), 400
 
-        # Check if user exists
-        if username == TEST_USER["username"]:
-            logger.debug("User found, verifying password...")
-
-            # Verify password using Django's password hasher
-            password_valid = DjangoPasswordVerifier.verify_password(
-                password, TEST_USER["password_hash"]
-            )
-
-            if password_valid:
-                logger.debug("Password verified successfully")
-                token, exp = create_token(username)
-                current_time = get_rwanda_time()
-
-                response = make_response(
-                    jsonify(
-                        {
-                            "token": token,
-                            "user": {"username": username, "name": TEST_USER["name"]},
-                            "expires": exp.isoformat(),
-                            "current_time": current_time.isoformat(),
-                            "expiry_seconds": TOKEN_EXPIRY,
-                            "timezone": "Africa/Kigali (CAT/UTC+2)",
-                        }
-                    )
-                )
-
-                response.set_cookie(
-                    "access_token",
-                    token,
-                    httponly=True,
-                    samesite="Lax",
-                    secure=False,
-                    max_age=TOKEN_EXPIRY,
-                    domain=COOKIE_DOMAIN,
-                    path="/",
-                    expires=exp,
-                )
-
-                response.headers.add(
-                    "Access-Control-Allow-Origin", request.headers.get("Origin")
-                )
-                response.headers.add("Access-Control-Allow-Credentials", "true")
-                response.headers.add("Access-Control-Expose-Headers", "Set-Cookie")
-
-                return response
-            else:
-                logger.warning("Password verification failed")
-                return jsonify({"error": "Invalid credentials"}), 401
-        else:
-            logger.warning(f"User not found: {username}")
+        # Get user from database
+        user = get_user_by_email(email)
+        if not user:
+            logger.warning(f"User not found: {email}")
             return jsonify({"error": "Invalid credentials"}), 401
+
+        # Verify password
+        if not DjangoPasswordVerifier.verify_password(password, user["password"]):
+            logger.warning(f"Invalid password for user: {email}")
+            return jsonify({"error": "Invalid credentials"}), 401
+
+        # Create token
+        token, exp = create_token(user)
+
+        # Create response
+        response = make_response(
+            jsonify(
+                {
+                    "user": {
+                        "email": user["email"],
+                        "name": f"{user['first_name']} {user['last_name']}",
+                        "role": user["role"],
+                    }
+                }
+            )
+        )
+
+        # Set cookie
+        response.set_cookie(
+            "access_token",
+            token,
+            httponly=True,
+            samesite="Lax",
+            secure=False,  # Set to True in production with HTTPS
+            max_age=TOKEN_EXPIRY,
+            domain=COOKIE_DOMAIN,
+            path="/",
+            expires=exp,
+        )
+
+        # Set CORS headers
+        response.headers.add(
+            "Access-Control-Allow-Origin", request.headers.get("Origin")
+        )
+        response.headers.add("Access-Control-Allow-Credentials", "true")
+        response.headers.add("Access-Control-Expose-Headers", "Set-Cookie")
+
+        logger.info(f"Login successful for user: {email}")
+        return response
 
     except Exception as e:
         logger.exception("Login error")
@@ -258,31 +261,30 @@ def verify():
         response.headers.add("Access-Control-Allow-Credentials", "true")
         return response
 
-    token = request.cookies.get("access_token")
-
-    if not token:
-        logger.warning("No token in cookies")
-        return jsonify({"error": "No token provided"}), 401
-
     try:
-        current_time = get_rwanda_time()
+        token = request.cookies.get("access_token")
+        if not token:
+            logger.warning("No token in cookies")
+            return jsonify({"error": "No token provided"}), 401
 
+        # Verify token
         payload = verify_token(token)
-        username = payload["sub"]
-        exp_timestamp = payload["exp"]
 
-        exp_time = datetime.fromtimestamp(exp_timestamp, RWANDA_TZ)
-        time_until_expiry = exp_timestamp - int(current_time.timestamp())
+        # Get fresh user data
+        user = get_user_by_email(payload["sub"])
+        if not user:
+            logger.warning(f"User not found during verification: {payload['sub']}")
+            return jsonify({"error": "User not found"}), 401
 
         response = make_response(
             jsonify(
                 {
                     "authenticated": True,
-                    "user": {"username": username, "name": "Test User"},
-                    "exp": exp_time.isoformat(),
-                    "current_time": current_time.isoformat(),
-                    "seconds_until_expiry": time_until_expiry,
-                    "timezone": "Africa/Kigali (CAT/UTC+2)",
+                    "user": {
+                        "email": user["email"],
+                        "name": f"{user['first_name']} {user['last_name']}",
+                        "role": user["role"],
+                    },
                 }
             )
         )
@@ -295,30 +297,11 @@ def verify():
         return response
 
     except jwt.ExpiredSignatureError:
-        # Clear the expired cookie
-        response = make_response(
-            jsonify(
-                {
-                    "error": "Token has expired",
-                    "code": "token_expired",
-                    "current_time": get_rwanda_time().isoformat(),
-                    "timezone": "Africa/Kigali (CAT/UTC+2)",
-                }
-            ),
-            401,
-        )
-        return clear_auth_cookie(response)
+        return jsonify({"error": "Token has expired", "code": "token_expired"}), 401
     except jwt.InvalidTokenError as e:
-        # Clear the invalid cookie
-        response = make_response(
-            jsonify(
-                {"error": "Invalid token", "code": "token_invalid", "details": str(e)}
-            ),
-            401,
-        )
-        return clear_auth_cookie(response)
+        return jsonify({"error": "Invalid token", "code": "token_invalid"}), 401
     except Exception as e:
-        logger.error(f"Verification error: {str(e)}")
+        logger.exception("Verification error")
         return jsonify({"error": str(e)}), 401
 
 
@@ -337,10 +320,19 @@ def logout():
     try:
         response = make_response(jsonify({"message": "Successfully logged out"}))
 
-        # Clear the auth cookie using the helper function
-        response = clear_auth_cookie(response)
+        # Clear the cookie
+        response.set_cookie(
+            "access_token",
+            "",
+            httponly=True,
+            samesite="Lax",
+            secure=False,  # Set to True in production with HTTPS
+            max_age=0,
+            domain=COOKIE_DOMAIN,
+            path="/",
+            expires=0,
+        )
 
-        # Set CORS headers
         response.headers.add(
             "Access-Control-Allow-Origin", request.headers.get("Origin")
         )
@@ -354,4 +346,17 @@ def logout():
 
 
 if __name__ == "__main__":
+    logger.info(f"Starting auth service...")
+    logger.info(f"Database path: {DB_PATH}")
+
+    # Verify database connection on startup
+    try:
+        with DatabaseConnection() as db:
+            db.cursor.execute("SELECT COUNT(*) FROM users")
+            count = db.cursor.fetchone()[0]
+            logger.info(f"Connected to database. Total users: {count}")
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        sys.exit(1)
+
     app.run(host="0.0.0.0", port=5001, debug=True)
