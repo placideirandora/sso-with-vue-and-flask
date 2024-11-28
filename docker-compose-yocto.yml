@@ -12,7 +12,7 @@ services:
       - JWT_SECRET=your_secret_key_here
       - DB_PATH=/app/data/ared.db  # Path inside container
     volumes:
-      - /Users/placideirandora/coding/WiFI-Captive_Portal/ared.db:/app/data/ared.db:ro  # Host:Container path mapping (read-only)
+      - /www/pages/ared.db:/app/data/ared.db:ro  # Host:Container path mapping (read-only)
     healthcheck:
       test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/app/data/ared.db').close()"]
       interval: 30s
@@ -24,7 +24,7 @@ services:
   app1:
     build: ./app1
     ports:
-      - "8080:80"
+      - "5002:80"
     environment:
       - VITE_AUTH_URL=http://sso.local:5001
     networks:
@@ -33,7 +33,7 @@ services:
   app2:
     build: ./app2
     ports:
-      - "8081:80"
+      - "5003:80"
     environment:
       - VITE_AUTH_URL=http://sso.local:5001
     networks:

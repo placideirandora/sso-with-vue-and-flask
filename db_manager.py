@@ -4,10 +4,7 @@ import argparse
 import logging
 import sys
 from datetime import datetime
-import os
-import json
 import requests
-from typing import Dict, List
 
 # Configure logging
 logging.basicConfig(
@@ -16,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-DB_PATH = "/Users/placideirandora/CODING/WiFI-Captive_Portal/ared.db"
+DB_PATH = "/www/pages/ared.db"
 API_URL = "https://app-ared-api-dev-south-africa-001.shirikihub.com/api/v1/yocto/router-associated-users/"
 
 
